@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>VUKRAX — выбор точки</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <style>
+    :root { color-scheme: light; --pad: 14px; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; background: #fff; color: #111; }
+    #app { display: flex; flex-direction: column; height: 100dvh; }
+    header { padding: 12px var(--pad) 8px; font-weight: 700; }
+    .search { display: flex; gap: 8px; padding: 0 var(--pad) 10px; }
+    input { flex: 1; min-width: 0; border: 1px solid #bbb; border-radius: 10px; padding: 11px; font-size: 16px; }
+    button { border: 0; border-radius: 10px; padding: 11px 14px; font-size: 15px; font-weight: 600; cursor: pointer; }
+    #searchBtn { background: #e8e8e8; color: #111; }
+    #map { flex: 1; min-height: 220px; }
+    footer { padding: 10px var(--pad) calc(10px + env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid #ddd; }
+    #address { font-size: 13px; line-height: 1.35; min-height: 34px; margin-bottom: 8px; color: #333; }
+    #confirm { width: 100%; background: var(--tg-theme-button-color, #2481cc); color: var(--tg-theme-button-text-color, #fff); }
+    #status { font-size: 12px; color: #666; margin-top: 6px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>Отметьте точку на карте</header>
+  <div class="search">
+    <input id="searchInput" placeholder="Найти адрес или место" autocomplete="street-address">
+    <button id="searchBtn" type="button">Найти</button>
+  </div>
+  <div id="map"></div>
+  <footer>
+    <div id="address">Нажмите на карту, чтобы выбрать точку.</div>
+    <button id="confirm" type="button">Подтвердить точку</button>
+    <div id="status">Можно двигать карту и нажать в нужном месте.</div>
+  </footer>
+</div>
+<script>
+(() => {
+  const tg = window.Telegram?.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+  const map = L.map('map').setView([44.0165, 21.0059], 7); // Serbia
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  let marker = null;
+  let selected = null;
+  let label = '';
+  const addressEl = document.getElementById('address');
+  const statusEl = document.getElementById('status');
+  const confirmBtn = document.getElementById('confirm');
+
+  async function reverseGeocode(lat, lon) {
+    statusEl.textContent = 'Определяем адрес…';
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&zoom=18&addressdetails=1`;
+      const response = await fetch(url, { headers: { 'Accept-Language': 'ru,sr,en' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      label = data.display_name || `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+      addressEl.textContent = label;
+      statusEl.textContent = 'Проверьте точку и подтвердите.';
+    } catch (e) {
+      label = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+      addressEl.textContent = label;
+      statusEl.textContent = 'Адрес не определён. Координаты всё равно можно отправить.';
+    }
+  }
+  function selectPoint(latlng) {
+    selected = { lat: latlng.lat, lon: latlng.lng };
+    if (!marker) marker = L.marker(latlng, { draggable: true }).addTo(map);
+    else marker.setLatLng(latlng);
+    marker.off('dragend').on('dragend', e => selectPoint(e.target.getLatLng()));
+    reverseGeocode(selected.lat, selected.lon);
+  }
+  map.on('click', e => selectPoint(e.latlng));
+
+  async function searchAddress() {
+    const q = document.getElementById('searchInput').value.trim();
+    if (!q) return;
+    statusEl.textContent = 'Ищем адрес…';
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=rs&q=${encodeURIComponent(q)}`;
+      const response = await fetch(url, { headers: { 'Accept-Language': 'ru,sr,en' } });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json();
+      if (!data.length) { statusEl.textContent = 'Адрес не найден. Попробуйте другой запрос или выберите точку на карте.'; return; }
+      const p = { lat: Number(data[0].lat), lng: Number(data[0].lon) };
+      map.setView(p, 17);
+      selectPoint(p);
+    } catch (e) {
+      statusEl.textContent = 'Не удалось выполнить поиск. Можно выбрать точку нажатием на карту.';
+    }
+  }
+  document.getElementById('searchBtn').addEventListener('click', searchAddress);
+  document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') searchAddress(); });
+  confirmBtn.addEventListener('click', () => {
+    if (!selected) { statusEl.textContent = 'Сначала нажмите на карту или найдите адрес.'; return; }
+    if (!tg || typeof tg.sendData !== 'function') {
+      statusEl.textContent = 'Откройте карту через кнопку внутри Telegram-бота.';
+      return;
+    }
+    tg.sendData(JSON.stringify({ type: 'vukrax_map_point', lat: selected.lat, lon: selected.lon, label }));
+  });
+})();
+</script>
+</body>
+</html>
